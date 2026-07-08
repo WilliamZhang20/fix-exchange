@@ -25,6 +25,11 @@ public:
     std::vector<Order> getOrders() const;
 
 private:
+    struct PriceLevel {
+        std::list<Order> orders;
+        int total_qty{0};
+    };
+
     void try_match(Order& aggressor);
     template<typename BookSide>
     void match_against(Order& aggressor, BookSide& opposite, bool is_buy);
@@ -32,8 +37,8 @@ private:
 
     std::string symbol_;
     FillCallback on_fill_;
-    absl::btree_map<double, std::list<Order>, std::greater<double>> bids_;
-    absl::btree_map<double, std::list<Order>> asks_;
+    absl::btree_map<double, PriceLevel, std::greater<double>> bids_;
+    absl::btree_map<double, PriceLevel> asks_;
     absl::flat_hash_map<std::string, std::list<Order>::iterator> order_index_;
     long long exec_seq_{0};
 };

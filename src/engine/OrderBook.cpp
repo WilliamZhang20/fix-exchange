@@ -11,13 +11,15 @@ OrderBook::OrderBook(std::string symbol, FillCallback on_fill)
 
 void OrderBook::restore(Order order) {
     if (order.side == '1') {
-        auto& lst = bids_[order.price];
-        lst.push_back(order);
-        order_index_[order.exchange_id] = std::prev(lst.end());
+        auto& level = bids_[order.price];
+        level.orders.push_back(order);
+        level.total_qty += order.leaves_qty;
+        order_index_[order.exchange_id] = std::prev(level.orders.end());
     } else {
-        auto& lst = asks_[order.price];
-        lst.push_back(order);
-        order_index_[order.exchange_id] = std::prev(lst.end());
+        auto& level = asks_[order.price];
+        level.orders.push_back(order);
+        level.total_qty += order.leaves_qty;
+        order_index_[order.exchange_id] = std::prev(level.orders.end());
     }
 }
 
@@ -26,13 +28,15 @@ int OrderBook::add(Order order) {
     try_match(order);
     if (order.leaves_qty > 0 && order.type == '2' && order.tif != '3') {
         if (order.side == '1') {
-            auto& lst = bids_[order.price];
-            lst.push_back(order);
-            order_index_[order.exchange_id] = std::prev(lst.end());
+            auto& level = bids_[order.price];
+            level.orders.push_back(order);
+            level.total_qty += order.leaves_qty;
+            order_index_[order.exchange_id] = std::prev(level.orders.end());
         } else {
-            auto& lst = asks_[order.price];
-            lst.push_back(order);
-            order_index_[order.exchange_id] = std::prev(lst.end());
+            auto& level = asks_[order.price];
+            level.orders.push_back(order);
+            level.total_qty += order.leaves_qty;
+            order_index_[order.exchange_id] = std::prev(level.orders.end());
         }
     }
     return order.leaves_qty;
@@ -46,13 +50,15 @@ bool OrderBook::cancel(const std::string& order_id) {
     char side = list_it->side;
     order_index_.erase(idx_it);
     if (side == '1') {
-        auto& lst = bids_[price];
-        lst.erase(list_it);
-        if (lst.empty()) bids_.erase(price);
+        auto& level = bids_[price];
+        level.total_qty -= list_it->leaves_qty;
+        level.orders.erase(list_it);
+        if (level.orders.empty()) bids_.erase(price);
     } else {
-        auto& lst = asks_[price];
-        lst.erase(list_it);
-        if (lst.empty()) asks_.erase(price);
+        auto& level = asks_[price];
+        level.total_qty -= list_it->leaves_qty;
+        level.orders.erase(list_it);
+        if (level.orders.empty()) asks_.erase(price);
     }
     return true;
 }
@@ -64,6 +70,11 @@ int OrderBook::replace(const std::string& order_id, double new_price, int new_qt
     auto list_it = idx_it->second;
 
     if (new_price == list_it->price && new_qty < list_it->leaves_qty) {
+        if (list_it->side == '1') {
+            bids_[list_it->price].total_qty += new_qty - list_it->leaves_qty;
+        } else {
+            asks_[list_it->price].total_qty += new_qty - list_it->leaves_qty;
+        }
         list_it->qty = new_qty;
         list_it->leaves_qty = new_qty;
         return new_qty;
@@ -74,13 +85,15 @@ int OrderBook::replace(const std::string& order_id, double new_price, int new_qt
     char side = order.side;
     order_index_.erase(idx_it);
     if (side == '1') {
-        auto& lst = bids_[old_price];
-        lst.erase(list_it);
-        if (lst.empty()) bids_.erase(old_price);
+        auto& level = bids_[old_price];
+        level.total_qty -= order.leaves_qty;
+        level.orders.erase(list_it);
+        if (level.orders.empty()) bids_.erase(old_price);
     } else {
-        auto& lst = asks_[old_price];
-        lst.erase(list_it);
-        if (lst.empty()) asks_.erase(old_price);
+        auto& level = asks_[old_price];
+        level.total_qty -= order.leaves_qty;
+        level.orders.erase(list_it);
+        if (level.orders.empty()) asks_.erase(old_price);
     }
 
     order.price = new_price;
@@ -99,12 +112,14 @@ void OrderBook::match_against(Order& aggressor, BookSide& opposite, bool is_buy)
                                : aggressor.price <= best_price);
         if (!crosses) break;
 
-        auto& q = it->second;
+        auto& level = it->second;
+        auto& q = level.orders;
         Order& resting = q.front();
         int fill_qty = std::min(aggressor.leaves_qty, resting.leaves_qty);
 
         aggressor.leaves_qty -= fill_qty;
         resting.leaves_qty   -= fill_qty;
+        level.total_qty      -= fill_qty;
 
         Fill taker = make_fill(aggressor, best_price, fill_qty, aggressor.leaves_qty);
         taker.arrival_ns  = aggressor.arrival_ns;
@@ -133,12 +148,12 @@ int OrderBook::available_to_fill(const Order& order) const {
     if (order.side == '1') {
         for (auto& kv : asks_) {
             if (order.type == '2' && kv.first > order.price) break;
-            for (auto& o : kv.second) total += o.leaves_qty;
+            total += kv.second.total_qty;
         }
     } else {
         for (auto& kv : bids_) {
             if (order.type == '2' && kv.first < order.price) break;
-            for (auto& o : kv.second) total += o.leaves_qty;
+            total += kv.second.total_qty;
         }
     }
     return total;
@@ -146,30 +161,26 @@ int OrderBook::available_to_fill(const Order& order) const {
 
 std::vector<BookLevel> OrderBook::getBids() const {
     std::vector<BookLevel> out;
-    for (const auto& [price, orders] : bids_) {
-        int total = 0;
-        for (const auto& o : orders) total += o.leaves_qty;
-        if (total > 0) out.push_back({price, total});
+    for (const auto& [price, level] : bids_) {
+        if (level.total_qty > 0) out.push_back({price, level.total_qty});
     }
     return out;
 }
 
 std::vector<BookLevel> OrderBook::getAsks() const {
     std::vector<BookLevel> out;
-    for (const auto& [price, orders] : asks_) {
-        int total = 0;
-        for (const auto& o : orders) total += o.leaves_qty;
-        if (total > 0) out.push_back({price, total});
+    for (const auto& [price, level] : asks_) {
+        if (level.total_qty > 0) out.push_back({price, level.total_qty});
     }
     return out;
 }
 
 std::vector<Order> OrderBook::getOrders() const {
     std::vector<Order> out;
-    for (const auto& [price, orders] : bids_)
-        for (const auto& o : orders) out.push_back(o);
-    for (const auto& [price, orders] : asks_)
-        for (const auto& o : orders) out.push_back(o);
+    for (const auto& [price, level] : bids_)
+        for (const auto& o : level.orders) out.push_back(o);
+    for (const auto& [price, level] : asks_)
+        for (const auto& o : level.orders) out.push_back(o);
     return out;
 }
 
