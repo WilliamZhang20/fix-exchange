@@ -3,6 +3,7 @@ project(fix-exchange CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+enable_testing()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -41,3 +42,21 @@ target_compile_options(fix-exchange PRIVATE
 )
 
 set_property(TARGET fix-exchange PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+
+add_executable(orderbook_intrusive_test
+    tests/orderbook_intrusive_test.cpp
+    src/engine/OrderBook.cpp
+)
+
+target_include_directories(orderbook_intrusive_test PRIVATE src)
+
+target_link_libraries(orderbook_intrusive_test PRIVATE
+    absl::btree
+    absl::flat_hash_map
+)
+
+target_compile_options(orderbook_intrusive_test PRIVATE
+    -Wall -Wextra -Wpedantic
+)
+
+add_test(NAME orderbook_intrusive_test COMMAND orderbook_intrusive_test)
