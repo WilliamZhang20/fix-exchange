@@ -8,9 +8,11 @@ namespace engine {
 
 OrderBook::OrderBook(std::string symbol, FillCallback on_fill)
     : symbol_(std::move(symbol)), on_fill_(std::move(on_fill)) {
-    order_index_.reserve(131072);
+    order_index_.reserve(16384);
     orders_.reserve(131072);
-    levels_.reserve(1024);
+    levels_.reserve(16384);
+    free_orders_.reserve(131072);
+    free_levels_.reserve(16384);
 }
 
 void OrderBook::restore(Order order) {
@@ -38,11 +40,32 @@ bool OrderBook::cancel(const std::string& order_id) {
     if (idx_it == order_index_.end()) return false;
     OrderId id = idx_it->second;
     order_index_.erase(idx_it);
-    bool removed = remove_resting_order(id);
+
+    LevelId level_id = orders_.level[id];
+    PriceLevel& lvl = level(level_id);
+    lvl.total_qty -= orders_.leaves_qty[id];
+
+    // A cancellation of the only order at a price is common in sparse books.
+    // Handle it directly so the hot path does not cross the generic
+    // unlink/free/erase helper chain just to remove a whole price level.
+    if (lvl.head == id && lvl.tail == id) {
+        lvl.head = kInvalidOrder;
+        lvl.tail = kInvalidOrder;
+        if (lvl.side == '1') {
+            bids_.erase(lvl.price);
+        } else {
+            asks_.erase(lvl.price);
+        }
+        lvl = PriceLevel{};
+        free_levels_.push_back(level_id);
+    } else {
+        unlink_from_level(id);
+    }
+    free_order(id);
 #ifndef NDEBUG
-    if (removed) assert_invariants();
+    assert_invariants();
 #endif
-    return removed;
+    return true;
 }
 
 int OrderBook::replace(const std::string& order_id, double new_price, int new_qty) {
@@ -316,8 +339,8 @@ OrderId OrderBook::allocate_order(Order order, LevelId level_id) {
 }
 
 void OrderBook::free_order(OrderId id) {
-    orders_.next[id] = kInvalidOrder;
-    orders_.prev[id] = kInvalidOrder;
+    // All callers unlink first (or remove a singleton whose links are already
+    // invalid), so rewriting next/prev here only adds duplicate stores.
     orders_.level[id] = kInvalidLevel;
     orders_.live[id] = 0;
     free_orders_.push_back(id);
