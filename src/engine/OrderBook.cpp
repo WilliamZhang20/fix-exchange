@@ -6,13 +6,20 @@
 
 namespace engine {
 
+namespace {
+constexpr std::size_t kInitialOrderCapacity = 131072;
+constexpr std::size_t kInitialLevelCapacity = 16384;
+} // namespace
+
 OrderBook::OrderBook(std::string symbol, FillCallback on_fill)
     : symbol_(std::move(symbol)), on_fill_(std::move(on_fill)) {
-    order_index_.reserve(16384);
-    orders_.reserve(131072);
-    levels_.reserve(16384);
-    free_orders_.reserve(131072);
-    free_levels_.reserve(16384);
+    // Keep the order lookup and SoA storage sized for the same production
+    // working set so growth does not introduce a hash-table rehash first.
+    order_index_.reserve(kInitialOrderCapacity);
+    orders_.reserve(kInitialOrderCapacity);
+    free_orders_.reserve(kInitialOrderCapacity);
+    levels_.reserve(kInitialLevelCapacity);
+    free_levels_.reserve(kInitialLevelCapacity);
 }
 
 void OrderBook::restore(Order order) {
